@@ -35,7 +35,13 @@ func (c *BuildClient) StartBuild(ctx context.Context, request *BuildRequest) (*B
 		return nil, nil, err
 	}
 
-	response, err := http.Post(serverURL, "application/json", bytes.NewBuffer(requestData))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, serverURL, bytes.NewReader(requestData))
+	if err != nil {
+		c.logger.Error("failed to create build request", zap.Error(err))
+		return nil, nil, err
+	}
+
+	response, err := http.DefaultClient.Do(req)
 	if err != nil {
 		c.logger.Error("failed to make post /build request", zap.Error(err))
 		return nil, nil, err
@@ -75,7 +81,13 @@ func (c *BuildClient) SignalBuild(ctx context.Context, buildID build.ID, signal 
 		return nil, err
 	}
 
-	response, err := http.Post(serverURL, "application/json", bytes.NewBuffer(requestData))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, serverURL, bytes.NewReader(requestData))
+	if err != nil {
+		c.logger.Error("failed to create signal request", zap.Error(err))
+		return nil, err
+	}
+
+	response, err := http.DefaultClient.Do(req)
 	if err != nil {
 		c.logger.Error("failed to make post /signal request", zap.Error(err))
 		return nil, err

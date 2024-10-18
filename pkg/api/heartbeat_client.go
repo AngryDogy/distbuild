@@ -27,11 +27,19 @@ func NewHeartbeatClient(l *zap.Logger, endpoint string) *HeartbeatClient {
 func (c *HeartbeatClient) Heartbeat(ctx context.Context, req *HeartbeatRequest) (*HeartbeatResponse, error) {
 	requestData, err := json.Marshal(req)
 	if err != nil {
+		c.logger.Error("failed to marshal heartbeat request", zap.Error(err))
 		return nil, err
 	}
 
 	serverURL := fmt.Sprintf("%s/heartbeat", c.endpoint)
-	response, err := http.Post(serverURL, "application/json", bytes.NewBuffer(requestData))
+
+	reqWithContext, err := http.NewRequestWithContext(ctx, "POST", serverURL, bytes.NewBuffer(requestData))
+	if err != nil {
+		c.logger.Error("failed to build heartbeat request", zap.Error(err))
+		return nil, err
+	}
+
+	response, err := http.DefaultClient.Do(reqWithContext)
 	if err != nil {
 		c.logger.Error("failed to make post /heartbeat request", zap.Error(err))
 		return nil, err
