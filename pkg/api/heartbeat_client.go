@@ -33,7 +33,7 @@ func (c *HeartbeatClient) Heartbeat(ctx context.Context, req *HeartbeatRequest) 
 
 	serverURL := fmt.Sprintf("%s/heartbeat", c.endpoint)
 
-	reqWithContext, err := http.NewRequestWithContext(ctx, "POST", serverURL, bytes.NewBuffer(requestData))
+	reqWithContext, err := http.NewRequestWithContext(ctx, "POST", serverURL, bytes.NewReader(requestData))
 	if err != nil {
 		c.logger.Error("failed to build heartbeat request", zap.Error(err))
 		return nil, err
