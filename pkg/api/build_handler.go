@@ -25,79 +25,82 @@ type BuildHandler struct {
 }
 
 func (h *BuildHandler) Register(mux *http.ServeMux) {
-	mux.HandleFunc("/build", func(w http.ResponseWriter, r *http.Request) {
-		requestData, err := io.ReadAll(r.Body)
-		if err != nil {
-			h.handleError(w, http.StatusBadRequest, err)
-			return
-		}
-		defer r.Body.Close()
+	mux.HandleFunc("/build", h.build)
+	mux.HandleFunc("/signal", h.signal)
+}
 
-		var buildRequest BuildRequest
-		err = json.Unmarshal(requestData, &buildRequest)
-		if err != nil {
-			h.handleError(w, http.StatusBadRequest, err)
-		}
+func (h *BuildHandler) build(w http.ResponseWriter, r *http.Request) {
+	requestData, err := io.ReadAll(r.Body)
+	if err != nil {
+		h.handleError(w, http.StatusBadRequest, err)
+		return
+	}
+	defer r.Body.Close()
 
-		statusWriter := newStatusWriter(h.logger, w)
-		err = h.service.StartBuild(r.Context(), &buildRequest, statusWriter)
-		if err != nil {
-			if w.Header().Get("Content-Type") == "application/json" {
-				statusWriter.Updated(&StatusUpdate{
-					BuildFailed: &BuildFailed{
-						Error: err.Error(),
-					},
-				})
-			} else {
-				h.handleError(w, http.StatusInternalServerError, err)
-			}
-		}
-	})
+	var buildRequest BuildRequest
+	err = json.Unmarshal(requestData, &buildRequest)
+	if err != nil {
+		h.handleError(w, http.StatusBadRequest, err)
+	}
 
-	mux.HandleFunc("/signal", func(w http.ResponseWriter, r *http.Request) {
-		requestData, err := io.ReadAll(r.Body)
-		if err != nil {
-			h.handleError(w, http.StatusBadRequest, err)
-			return
-		}
-		defer r.Body.Close()
-
-		var signalRequest SignalRequest
-		err = json.Unmarshal(requestData, &signalRequest)
-		if err != nil {
-			h.handleError(w, http.StatusBadRequest, err)
-			return
-		}
-
-		buildID := r.URL.Query().Get("build_id")
-		if buildID == "" {
-			h.handleError(w, http.StatusBadRequest, errors.New("build_id is required in url"))
-			return
-		}
-
-		var id build.ID
-		err = id.UnmarshalText([]byte(buildID))
-		if err != nil {
+	statusWriter := newStatusWriter(h.logger, w)
+	err = h.service.StartBuild(r.Context(), &buildRequest, statusWriter)
+	if err != nil {
+		if w.Header().Get("Content-Type") == "application/json" {
+			statusWriter.Updated(&StatusUpdate{
+				BuildFailed: &BuildFailed{
+					Error: err.Error(),
+				},
+			})
+		} else {
 			h.handleError(w, http.StatusInternalServerError, err)
-			return
 		}
+	}
+}
 
-		signalResponse, err := h.service.SignalBuild(r.Context(), id, &signalRequest)
-		if err != nil {
-			h.handleError(w, http.StatusInternalServerError, err)
-			return
-		}
+func (h *BuildHandler) signal(w http.ResponseWriter, r *http.Request) {
+	requestData, err := io.ReadAll(r.Body)
+	if err != nil {
+		h.handleError(w, http.StatusBadRequest, err)
+		return
+	}
+	defer r.Body.Close()
 
-		responseData, err := json.Marshal(&signalResponse)
-		if err != nil {
-			h.handleError(w, http.StatusInternalServerError, err)
-			return
-		}
+	var signalRequest SignalRequest
+	err = json.Unmarshal(requestData, &signalRequest)
+	if err != nil {
+		h.handleError(w, http.StatusBadRequest, err)
+		return
+	}
 
-		w.WriteHeader(http.StatusOK)
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(responseData)
-	})
+	buildID := r.URL.Query().Get("build_id")
+	if buildID == "" {
+		h.handleError(w, http.StatusBadRequest, errors.New("build_id is required in url"))
+		return
+	}
+
+	var id build.ID
+	err = id.UnmarshalText([]byte(buildID))
+	if err != nil {
+		h.handleError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	signalResponse, err := h.service.SignalBuild(r.Context(), id, &signalRequest)
+	if err != nil {
+		h.handleError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	responseData, err := json.Marshal(&signalResponse)
+	if err != nil {
+		h.handleError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(responseData)
 }
 
 func (h *BuildHandler) handleError(w http.ResponseWriter, status int, err error) {
