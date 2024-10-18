@@ -77,11 +77,13 @@ func (c *BuildClient) SignalBuild(ctx context.Context, buildID build.ID, signal 
 
 	response, err := http.Post(serverURL, "application/json", bytes.NewBuffer(requestData))
 	if err != nil {
+		c.logger.Error("failed to make post /signal request", zap.Error(err))
 		return nil, err
 	}
 
 	responseData, err := io.ReadAll(response.Body)
 	if err != nil {
+		c.logger.Error("failed to read response body", zap.Error(err))
 		return nil, err
 	}
 	defer response.Body.Close()
@@ -89,6 +91,7 @@ func (c *BuildClient) SignalBuild(ctx context.Context, buildID build.ID, signal 
 	var signalResponse SignalResponse
 	err = json.Unmarshal(responseData, &signalResponse)
 	if err != nil {
+		c.logger.Error("failed to decode response body to signalResponse", zap.Error(err))
 		return nil, &buildError{
 			error: string(responseData),
 		}
