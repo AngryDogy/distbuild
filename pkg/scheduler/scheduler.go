@@ -48,6 +48,11 @@ func (c *Scheduler) LocateArtifact(id build.ID) (api.WorkerID, bool) {
 	defer c.completedMutex.Unlock()
 
 	workerID, ok := c.completed[id]
+	if ok {
+		c.logger.Info("Artifact was located", zap.String("id", id.String()), zap.String("worker", workerID.String()))
+	} else {
+		c.logger.Info("Artifact was not found", zap.String("id", id.String()))
+	}
 	return workerID, ok
 }
 
@@ -55,6 +60,7 @@ func (c *Scheduler) OnJobComplete(workerID api.WorkerID, jobID build.ID, res *ap
 	c.completedMutex.Lock()
 	defer c.completedMutex.Unlock()
 
+	c.logger.Info("job was completed", zap.String("workerID", workerID.String()), zap.String("jobID", jobID.String()))
 	c.completed[jobID] = workerID
 	return true
 }
@@ -68,6 +74,7 @@ func (c *Scheduler) ScheduleJob(job *api.JobSpec) *PendingJob {
 	c.queueMutex.Lock()
 	defer c.queueMutex.Unlock()
 
+	c.logger.Info("job was enqueued")
 	c.queue = append(c.queue, pendingJob)
 	return nil
 }
@@ -82,6 +89,7 @@ func (c *Scheduler) PickJob(ctx context.Context, workerID api.WorkerID) *Pending
 
 	pendingJob := c.queue[0]
 	c.queue = c.queue[1:]
+	c.logger.Info("picking job", zap.String("worker", workerID.String()), zap.String("jobID", pendingJob.Job.ID.String()))
 
 	return pendingJob
 }
