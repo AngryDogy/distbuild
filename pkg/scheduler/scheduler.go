@@ -76,12 +76,12 @@ func (c *Scheduler) ScheduleJob(job *api.JobSpec) *PendingJob {
 
 	c.logger.Info("job was enqueued")
 	c.queue = append(c.queue, pendingJob)
-	return nil
+	return pendingJob
 }
 
 func (c *Scheduler) PickJob(ctx context.Context, workerID api.WorkerID) *PendingJob {
 	if len(c.queue) == 0 {
-		c.logger.Error("scheduler queue is empty")
+		c.logger.Info("scheduler queue is empty")
 		return nil
 	}
 	c.completedMutex.Lock()
