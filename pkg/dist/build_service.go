@@ -43,6 +43,7 @@ func (s *buildService) StartBuild(ctx context.Context, request *api.BuildRequest
 	case <-s.signalMap[buildID]:
 	}
 
+	request.Graph.Jobs = build.TopSort(request.Graph.Jobs)
 	var wg sync.WaitGroup
 	for _, job := range request.Graph.Jobs {
 		pendingJob := s.scheduler.ScheduleJob(&api.JobSpec{

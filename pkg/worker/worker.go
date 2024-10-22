@@ -11,6 +11,7 @@ import (
 	"gitlab.com/manytask/itmo-go/public/distbuild/pkg/artifact"
 	"gitlab.com/manytask/itmo-go/public/distbuild/pkg/build"
 	"gitlab.com/manytask/itmo-go/public/distbuild/pkg/filecache"
+	"gitlab.com/manytask/itmo-go/public/distbuild/pkg/tarstream"
 	"go.uber.org/zap"
 	"io"
 	"net/http"
@@ -49,7 +50,8 @@ type Worker struct {
 
 	freeSlots *atomic.Int64
 
-	workdir string
+	workdir   string
+	outputdir string
 
 	ticker *time.Ticker
 }
@@ -97,7 +99,8 @@ func New(
 			return &freeSlots
 		}(),
 
-		workdir: workerPath.String(),
+		workdir:   workerPath.String(),
+		outputdir: fmt.Sprintf("%soutput/", workerPath.String()),
 
 		ticker: time.NewTicker(time.Second),
 	}
@@ -126,7 +129,7 @@ func (w *Worker) Run(ctx context.Context) error {
 				if w.finishedJobs[id] == nil {
 					w.freeSlots.Add(-1)
 					w.logger.Info("job started execution", zap.Any("job", job))
-					go w.execute(ctx, &job)
+					go w.execute(ctx, job)
 				}
 			}
 		}
@@ -168,12 +171,36 @@ func (w *Worker) heartbeat(ctx context.Context) (*api.HeartbeatResponse, error) 
 
 }
 
-func (w *Worker) execute(ctx context.Context, job *api.JobSpec) {
+func (w *Worker) execute(ctx context.Context, job api.JobSpec) {
 	var err error
 	err = w.downloadFiles(ctx, job.SourceFiles)
 	if err != nil {
 		w.logger.Error("download files failed", zap.Error(err))
 		return
+	}
+
+	depsMap := make(map[build.ID]string)
+	for _, dep := range job.Deps {
+		depsMap[dep] = fmt.Sprintf("%sartifacts/c/%s", w.workdir, dep.Path())
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+
+			}
+
+			_, unlock, err := w.artifacts.Get(dep)
+
+			if unlock != nil {
+				unlock()
+			}
+
+			if err == nil {
+				break
+			}
+		}
+
 	}
 
 	var stdout bytes.Buffer
@@ -183,7 +210,8 @@ func (w *Worker) execute(ctx context.Context, job *api.JobSpec) {
 
 		cmd, err := cmdToRender.Render(build.JobContext{
 			SourceDir: w.workdir,
-			OutputDir: w.workdir,
+			OutputDir: fmt.Sprintf("%sjob%s", w.outputdir, job.ID.String()),
+			Deps:      depsMap,
 		})
 		if err != nil {
 			w.logger.Error("render cmd failed", zap.Error(err))
@@ -191,7 +219,6 @@ func (w *Worker) execute(ctx context.Context, job *api.JobSpec) {
 		}
 
 		if cmd.Exec != nil {
-
 			var cmdExecutable *exec.Cmd
 			if len(cmd.Exec) == 1 {
 				cmdExecutable = exec.Command(cmd.Exec[0])
@@ -214,18 +241,16 @@ func (w *Worker) execute(ctx context.Context, job *api.JobSpec) {
 			w.logger.Info("cmd execution succeeded", zap.String("command", cmdExecutable.String()))
 		}
 
-		if cmd.CatOutput != "" {
-			file, err := os.Create(cmd.CatOutput)
-			if err != nil {
-				w.logger.Error("create file for cat output failed", zap.Error(err))
-			}
-			_, err = file.WriteString(cmd.CatTemplate)
-			if err != nil {
-				w.logger.Error("failed to write to file", zap.Error(err))
-			}
-			file.Close()
+		err = w.handleOutput(ctx, job.ID, cmd)
+		if err != nil {
+			w.logger.Error("handle output failed", zap.Error(err))
 		}
 
+	}
+
+	err = w.createArtifact(ctx, job.ID)
+	if err != nil {
+		w.logger.Error("create artifact failed", zap.Error(err))
 	}
 
 	w.finishedJobsMutex.Lock()
@@ -309,4 +334,63 @@ func (w *Worker) downloadFiles(ctx context.Context, sourcesFiles map[build.ID]st
 
 	}
 	return nil
+}
+
+func (w *Worker) handleOutput(ctx context.Context, jobID build.ID, cmd *build.Cmd) error {
+	if cmd.CatOutput != "" {
+
+		err := os.MkdirAll(fmt.Sprintf("%sjob%s", w.outputdir, jobID.String()), os.ModePerm)
+		if err != nil {
+			return err
+		}
+
+		file, err := os.Create(cmd.CatOutput)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+
+		_, err = file.WriteString(cmd.CatTemplate)
+		if err != nil {
+			return err
+		}
+
+	}
+	return nil
+}
+
+func (w *Worker) createArtifact(ctx context.Context, jobID build.ID) error {
+	var path string
+	var commit func() error
+	var abort func() error
+	var err error
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+
+		}
+		path, commit, abort, err = w.artifacts.Create(jobID)
+		if err == nil {
+			break
+		}
+	}
+
+	storage := make([]byte, 0, 256000)
+	buffer := bytes.NewBuffer(storage)
+
+	jobOutput := fmt.Sprintf("%sjob%s", w.outputdir, jobID.String())
+	err = tarstream.Send(jobOutput, buffer)
+	if err != nil {
+		abort()
+		return err
+	}
+
+	err = tarstream.Receive(path, buffer)
+	if err != nil {
+		abort()
+		return err
+	}
+	return commit()
 }
