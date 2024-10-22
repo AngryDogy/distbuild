@@ -13,7 +13,9 @@ import (
 type buildService struct {
 	fileCache *filecache.Cache
 	scheduler *scheduler.Scheduler
-	signalMap map[build.ID]chan struct{}
+
+	signalMapMutex sync.Mutex
+	signalMap      map[build.ID]chan struct{}
 }
 
 func (s *buildService) StartBuild(ctx context.Context, request *api.BuildRequest, w api.StatusWriter) error {
@@ -35,7 +37,9 @@ func (s *buildService) StartBuild(ctx context.Context, request *api.BuildRequest
 		return err
 	}
 
+	s.signalMapMutex.Lock()
 	s.signalMap[buildID] = make(chan struct{}, 1)
+	s.signalMapMutex.Unlock()
 
 	select {
 	case <-ctx.Done():
@@ -75,6 +79,9 @@ func (s *buildService) StartBuild(ctx context.Context, request *api.BuildRequest
 }
 
 func (s *buildService) SignalBuild(ctx context.Context, buildID build.ID, signal *api.SignalRequest) (*api.SignalResponse, error) {
+	s.signalMapMutex.Lock()
+	defer s.signalMapMutex.Unlock()
+
 	if s.signalMap[buildID] == nil {
 		return nil, errors.New("build not found")
 	}

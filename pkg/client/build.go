@@ -90,7 +90,7 @@ func (c *Client) Build(ctx context.Context, graph build.Graph, lsn BuildListener
 		}
 
 		if statusUpdate.JobFinished != nil {
-			c.logger.Info("job finished", zap.String("jobId", statusUpdate.JobFinished.ID.String()))
+			c.logger.Info("finished job was receiver by client", zap.String("jobId", statusUpdate.JobFinished.ID.String()))
 			lsn.OnJobStdout(statusUpdate.JobFinished.ID, statusUpdate.JobFinished.Stdout)
 			lsn.OnJobStderr(statusUpdate.JobFinished.ID, statusUpdate.JobFinished.Stderr)
 

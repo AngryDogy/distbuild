@@ -22,6 +22,7 @@ type Coordinator struct {
 	heartbeatHandler *api.HeartbeatHandler
 	buildHandler     *api.BuildHandler
 	fileCacheHandler *filecache.Handler
+	scheduler        *scheduler.Scheduler
 }
 
 var defaultConfig = scheduler.Config{
@@ -45,18 +46,21 @@ func NewCoordinator(
 
 		heartbeatHandler: api.NewHeartbeatHandler(log, &heartbeatService{
 			scheduler:   coordinatorScheduler,
-			runningJobs: make(map[build.ID]*scheduler.PendingJob),
+			runningJobs: make(map[string]*scheduler.PendingJob),
 		}),
 		buildHandler: api.NewBuildService(log, &buildService{
 			fileCache: fileCache,
 			scheduler: coordinatorScheduler,
 			signalMap: make(map[build.ID]chan struct{}),
 		}),
+		scheduler: coordinatorScheduler,
 	}
 
 	coordinator.heartbeatHandler.Register(coordinator.mux)
 	coordinator.buildHandler.Register(coordinator.mux)
 	coordinator.fileCacheHandler.Register(coordinator.mux)
+
+	coordinator.mux.HandleFunc("/artifact", coordinator.getArtifactWorker)
 
 	return coordinator
 
@@ -64,4 +68,31 @@ func NewCoordinator(
 
 func (c *Coordinator) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c.mux.ServeHTTP(w, r)
+}
+
+func (c *Coordinator) getArtifactWorker(w http.ResponseWriter, r *http.Request) {
+	artifactID := r.URL.Query().Get("id")
+	if artifactID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("artifact id is required"))
+		return
+	}
+
+	var id build.ID
+	err := id.UnmarshalText([]byte(artifactID))
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error()))
+		return
+	}
+
+	workerID, ok := c.scheduler.LocateArtifact(id)
+	if !ok {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	c.logger.Info("Artifact was successfully found", zap.String("artifactID", artifactID), zap.Any("workerID", workerID))
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(workerID.String()))
 }

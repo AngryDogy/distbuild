@@ -14,6 +14,7 @@ import (
 	"gitlab.com/manytask/itmo-go/public/distbuild/pkg/tarstream"
 	"go.uber.org/zap"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"os/exec"
@@ -24,7 +25,7 @@ import (
 )
 
 const (
-	freeWorkerSlots = 3
+	freeWorkerSlots = 1
 )
 
 type Worker struct {
@@ -36,7 +37,9 @@ type Worker struct {
 	fileCache  *filecache.Cache
 	fileClient *filecache.Client
 
-	artifacts *artifact.Cache
+	artifacts       *artifact.Cache
+	artifactHandler *artifact.Handler
+	artifactTicker  *time.Ticker
 
 	heartbeatClient *api.HeartbeatClient
 
@@ -65,6 +68,9 @@ func New(
 ) *Worker {
 	mux := http.NewServeMux()
 
+	artifactsHandler := artifact.NewHandler(log, artifacts)
+	artifactsHandler.Register(mux)
+
 	workerIdSplit := strings.Split(workerID.String(), "/")
 	workerName := fmt.Sprintf("%s%s", workerIdSplit[len(workerIdSplit)-2], workerIdSplit[len(workerIdSplit)-1])
 	cachePath := fileCache.GetCacheDir()
@@ -86,7 +92,8 @@ func New(
 		fileCache:  fileCache,
 		fileClient: filecache.NewClient(log, coordinatorEndpoint),
 
-		artifacts: artifacts,
+		artifacts:       artifacts,
+		artifactHandler: artifactsHandler,
 
 		heartbeatClient: api.NewHeartbeatClient(log, coordinatorEndpoint),
 
@@ -102,7 +109,8 @@ func New(
 		workdir:   workerPath.String(),
 		outputdir: fmt.Sprintf("%soutput/", workerPath.String()),
 
-		ticker: time.NewTicker(time.Second),
+		ticker:         time.NewTicker(time.Second),
+		artifactTicker: time.NewTicker(time.Second),
 	}
 }
 
@@ -168,10 +176,13 @@ func (w *Worker) heartbeat(ctx context.Context) (*api.HeartbeatResponse, error) 
 	})
 
 	return response, err
-
 }
 
 func (w *Worker) execute(ctx context.Context, job api.JobSpec) {
+	defer func() {
+		w.freeSlots.Add(1)
+	}()
+
 	var err error
 	err = w.downloadFiles(ctx, job.SourceFiles)
 	if err != nil {
@@ -179,28 +190,10 @@ func (w *Worker) execute(ctx context.Context, job api.JobSpec) {
 		return
 	}
 
-	depsMap := make(map[build.ID]string)
-	for _, dep := range job.Deps {
-		depsMap[dep] = fmt.Sprintf("%sartifacts/c/%s", w.workdir, dep.Path())
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-
-			}
-
-			_, unlock, err := w.artifacts.Get(dep)
-
-			if unlock != nil {
-				unlock()
-			}
-
-			if err == nil {
-				break
-			}
-		}
-
+	depsMap, err := w.handleDependencies(ctx, job.Deps)
+	if err != nil {
+		w.logger.Error("handle dependencies failed", zap.Error(err))
+		return
 	}
 
 	var stdout bytes.Buffer
@@ -250,13 +243,11 @@ func (w *Worker) execute(ctx context.Context, job api.JobSpec) {
 
 	err = w.createArtifact(ctx, job.ID)
 	if err != nil {
-		w.logger.Error("create artifact failed", zap.Error(err))
+		w.logger.Info("create artifact failed", zap.Error(err))
 	}
 
 	w.finishedJobsMutex.Lock()
 	defer w.finishedJobsMutex.Unlock()
-
-	w.freeSlots.Add(1)
 
 	w.finishedJobs[job.ID] = &api.JobResult{
 		ID:     job.ID,
@@ -269,6 +260,44 @@ func (w *Worker) execute(ctx context.Context, job api.JobSpec) {
 	}
 
 	w.logger.Info("job finished", zap.Any("jobID", job.ID), zap.Any("stdout", stdout.String()), zap.Any("stderr", stderr.String()), zap.Any("error", err))
+}
+
+func (w *Worker) handleDependencies(ctx context.Context, deps []build.ID) (map[build.ID]string, error) {
+	depsMap := make(map[build.ID]string)
+	for _, dep := range deps {
+		depsMap[dep] = fmt.Sprintf("%sartifacts/c/%s", w.workdir, dep.Path())
+		for {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-w.artifactTicker.C:
+			}
+
+			_, unlock, err := w.artifacts.Get(dep)
+
+			if unlock != nil {
+				unlock()
+			}
+
+			if err == nil {
+				break
+			}
+
+			response, err := http.Get(fmt.Sprintf("%s/artifact?id=%s", w.coordinatorEndpoint, dep.String()))
+			if err != nil || response.StatusCode != http.StatusOK {
+				continue
+			}
+
+			workerID, err := ioutil.ReadAll(response.Body)
+			if err != nil {
+				continue
+			}
+
+			artifact.Download(ctx, string(workerID), w.artifacts, dep)
+		}
+
+	}
+	return depsMap, nil
 }
 
 func (w *Worker) downloadFiles(ctx context.Context, sourcesFiles map[build.ID]string) error {
@@ -392,5 +421,6 @@ func (w *Worker) createArtifact(ctx context.Context, jobID build.ID) error {
 		abort()
 		return err
 	}
+
 	return commit()
 }

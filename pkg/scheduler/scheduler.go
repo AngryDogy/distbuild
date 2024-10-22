@@ -37,9 +37,10 @@ type Scheduler struct {
 
 func NewScheduler(l *zap.Logger, config Config) *Scheduler {
 	return &Scheduler{
-		logger: l,
-		config: config,
-		queue:  make([]*PendingJob, 0),
+		logger:    l,
+		config:    config,
+		queue:     make([]*PendingJob, 0),
+		completed: map[build.ID]api.WorkerID{},
 	}
 }
 
