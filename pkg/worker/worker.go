@@ -18,30 +18,35 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
+)
+
+const (
+	freeWorkerSlots = 3
 )
 
 type Worker struct {
-	id     api.WorkerID
-	logger *zap.Logger
-
+	id                  api.WorkerID
+	logger              *zap.Logger
 	coordinatorEndpoint string
-
-	mux *http.ServeMux
+	mux                 *http.ServeMux
 
 	fileCache  *filecache.Cache
 	fileClient *filecache.Client
 
-	artifacts       *artifact.Cache
+	artifacts *artifact.Cache
+
 	heartbeatClient *api.HeartbeatClient
 
 	runningJobsMutex sync.Mutex
-	runningJobs      []build.ID
+	runningJobs      map[build.ID]bool
 
 	finishedJobsMutex sync.Mutex
 	finishedJobs      []api.JobResult
 
 	addedArtifacts []build.ID
-	freeSlots      int
+
+	freeSlots *atomic.Int64
 
 	workdir string
 }
@@ -72,15 +77,24 @@ func New(
 		coordinatorEndpoint: coordinatorEndpoint,
 		logger:              log,
 		mux:                 mux,
-		fileCache:           fileCache,
-		fileClient:          filecache.NewClient(log, coordinatorEndpoint),
-		artifacts:           artifacts,
-		heartbeatClient:     api.NewHeartbeatClient(log, coordinatorEndpoint),
-		runningJobs:         make([]build.ID, 0),
-		finishedJobs:        make([]api.JobResult, 0),
-		addedArtifacts:      make([]build.ID, 0),
-		freeSlots:           1,
-		workdir:             workerPath.String(),
+
+		fileCache:  fileCache,
+		fileClient: filecache.NewClient(log, coordinatorEndpoint),
+
+		artifacts: artifacts,
+
+		heartbeatClient: api.NewHeartbeatClient(log, coordinatorEndpoint),
+
+		runningJobs:    map[build.ID]bool{},
+		finishedJobs:   make([]api.JobResult, 0),
+		addedArtifacts: make([]build.ID, 0),
+		freeSlots: func() *atomic.Int64 {
+			freeSlots := atomic.Int64{}
+			freeSlots.Store(freeWorkerSlots)
+			return &freeSlots
+		}(),
+
+		workdir: workerPath.String(),
 	}
 }
 
@@ -96,13 +110,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		default:
 		}
 
-		response, err := w.heartbeatClient.Heartbeat(ctx, &api.HeartbeatRequest{
-			WorkerID:       w.id,
-			RunningJobs:    w.runningJobs,
-			FreeSlots:      w.freeSlots,
-			FinishedJob:    w.finishedJobs,
-			AddedArtifacts: w.addedArtifacts,
-		})
+		response, err := w.heartbeat(ctx)
 
 		if err != nil {
 			w.logger.Error("heartbeat failed", zap.Error(err))
@@ -111,24 +119,47 @@ func (w *Worker) Run(ctx context.Context) error {
 
 		if len(response.JobsToRun) != 0 {
 			w.logger.Info("jobs are received, started execution", zap.Any("response", response))
-			var wg sync.WaitGroup
 			for id, job := range response.JobsToRun {
-				w.runningJobs = append(w.runningJobs, id)
+				w.runningJobsMutex.Lock()
+				w.runningJobs[id] = true
+				w.runningJobsMutex.Unlock()
 
-				wg.Add(1)
+				w.freeSlots.Add(-1)
+
 				w.logger.Info("job started execution", zap.Any("job", job))
-				go w.execute(ctx, &job, &wg)
+				go w.execute(ctx, &job)
 			}
-			wg.Wait()
-		} else {
-			//time.Sleep(time.Second)
 		}
 	}
 }
 
-func (w *Worker) execute(ctx context.Context, job *api.JobSpec, wg *sync.WaitGroup) {
-	defer wg.Done()
+func (w *Worker) heartbeat(ctx context.Context) (*api.HeartbeatResponse, error) {
+	w.runningJobsMutex.Lock()
+	defer w.runningJobsMutex.Unlock()
 
+	currentRunningJobs := make([]build.ID, 0)
+	for id, _ := range w.runningJobs {
+		currentRunningJobs = append(currentRunningJobs, id)
+	}
+
+	w.finishedJobsMutex.Lock()
+	defer w.finishedJobsMutex.Unlock()
+
+	response, err := w.heartbeatClient.Heartbeat(ctx, &api.HeartbeatRequest{
+		WorkerID:       w.id,
+		RunningJobs:    currentRunningJobs,
+		FreeSlots:      int(w.freeSlots.Load()),
+		FinishedJob:    w.finishedJobs,
+		AddedArtifacts: w.addedArtifacts,
+	})
+
+	w.finishedJobs = make([]api.JobResult, 0)
+
+	return response, err
+
+}
+
+func (w *Worker) execute(ctx context.Context, job *api.JobSpec) {
 	var err error
 	err = w.downloadFiles(ctx, job.SourceFiles)
 	if err != nil {
@@ -179,8 +210,14 @@ func (w *Worker) execute(ctx context.Context, job *api.JobSpec, wg *sync.WaitGro
 
 	}
 
+	w.runningJobsMutex.Lock()
 	w.finishedJobsMutex.Lock()
+	defer w.runningJobsMutex.Unlock()
 	defer w.finishedJobsMutex.Unlock()
+
+	delete(w.runningJobs, job.ID)
+
+	w.freeSlots.Add(1)
 
 	w.finishedJobs = append(w.finishedJobs, api.JobResult{
 		ID:     job.ID,
