@@ -43,7 +43,7 @@ type Worker struct {
 	runningJobs      map[build.ID]bool
 
 	finishedJobsMutex sync.Mutex
-	finishedJobs      []api.JobResult
+	finishedJobs      map[build.ID]*api.JobResult
 
 	addedArtifacts []build.ID
 
@@ -89,7 +89,7 @@ func New(
 		heartbeatClient: api.NewHeartbeatClient(log, coordinatorEndpoint),
 
 		runningJobs:    map[build.ID]bool{},
-		finishedJobs:   make([]api.JobResult, 0),
+		finishedJobs:   make(map[build.ID]*api.JobResult),
 		addedArtifacts: make([]build.ID, 0),
 		freeSlots: func() *atomic.Int64 {
 			freeSlots := atomic.Int64{}
@@ -123,10 +123,11 @@ func (w *Worker) Run(ctx context.Context) error {
 				w.runningJobs[id] = true
 				w.runningJobsMutex.Unlock()
 
-				w.freeSlots.Add(-1)
-
-				w.logger.Info("job started execution", zap.Any("job", job))
-				go w.execute(ctx, &job)
+				if w.finishedJobs[id] == nil {
+					w.freeSlots.Add(-1)
+					w.logger.Info("job started execution", zap.Any("job", job))
+					go w.execute(ctx, &job)
+				}
 			}
 		}
 
@@ -141,25 +142,27 @@ func (w *Worker) Run(ctx context.Context) error {
 
 func (w *Worker) heartbeat(ctx context.Context) (*api.HeartbeatResponse, error) {
 	w.runningJobsMutex.Lock()
+	w.finishedJobsMutex.Lock()
 	defer w.runningJobsMutex.Unlock()
+	defer w.finishedJobsMutex.Unlock()
 
 	currentRunningJobs := make([]build.ID, 0)
-	for id, _ := range w.runningJobs {
-		currentRunningJobs = append(currentRunningJobs, id)
+	currentFinishedJobs := make([]api.JobResult, 0)
+	for id, isRunning := range w.runningJobs {
+		if isRunning && w.finishedJobs[id] != nil {
+			w.runningJobs[id] = false
+			currentRunningJobs = append(currentRunningJobs, id)
+			currentFinishedJobs = append(currentFinishedJobs, *w.finishedJobs[id])
+		}
 	}
-
-	w.finishedJobsMutex.Lock()
-	defer w.finishedJobsMutex.Unlock()
 
 	response, err := w.heartbeatClient.Heartbeat(ctx, &api.HeartbeatRequest{
 		WorkerID:       w.id,
 		RunningJobs:    currentRunningJobs,
 		FreeSlots:      int(w.freeSlots.Load()),
-		FinishedJob:    w.finishedJobs,
+		FinishedJob:    currentFinishedJobs,
 		AddedArtifacts: w.addedArtifacts,
 	})
-
-	w.finishedJobs = make([]api.JobResult, 0)
 
 	return response, err
 
@@ -212,22 +215,25 @@ func (w *Worker) execute(ctx context.Context, job *api.JobSpec) {
 		}
 
 		if cmd.CatOutput != "" {
-			//w.fileCache.
-
+			file, err := os.Create(cmd.CatOutput)
+			if err != nil {
+				w.logger.Error("create file for cat output failed", zap.Error(err))
+			}
+			_, err = file.WriteString(cmd.CatTemplate)
+			if err != nil {
+				w.logger.Error("failed to write to file", zap.Error(err))
+			}
+			file.Close()
 		}
 
 	}
 
-	w.runningJobsMutex.Lock()
 	w.finishedJobsMutex.Lock()
-	defer w.runningJobsMutex.Unlock()
 	defer w.finishedJobsMutex.Unlock()
-
-	delete(w.runningJobs, job.ID)
 
 	w.freeSlots.Add(1)
 
-	w.finishedJobs = append(w.finishedJobs, api.JobResult{
+	w.finishedJobs[job.ID] = &api.JobResult{
 		ID:     job.ID,
 		Stdout: stdout.Bytes(),
 		Stderr: stderr.Bytes(),
@@ -235,10 +241,9 @@ func (w *Worker) execute(ctx context.Context, job *api.JobSpec) {
 			s := stderr.String()
 			return &s
 		}(),
-	})
+	}
 
 	w.logger.Info("job finished", zap.Any("jobID", job.ID), zap.Any("stdout", stdout.String()), zap.Any("stderr", stderr.String()), zap.Any("error", err))
-
 }
 
 func (w *Worker) downloadFiles(ctx context.Context, sourcesFiles map[build.ID]string) error {
