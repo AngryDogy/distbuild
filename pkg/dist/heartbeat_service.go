@@ -13,14 +13,16 @@ type heartbeatService struct {
 }
 
 func (s *heartbeatService) Heartbeat(ctx context.Context, req *api.HeartbeatRequest) (*api.HeartbeatResponse, error) {
-
 	jobsToRun := make(map[build.ID]api.JobSpec)
 	for i := 0; i < req.FreeSlots; i++ {
 		pendingJob := s.scheduler.PickJob(ctx, req.WorkerID)
-		if pendingJob != nil {
-			jobsToRun[pendingJob.Job.ID] = *pendingJob.Job
-			s.runningJobs[pendingJob.Job.ID] = pendingJob
+		if pendingJob == nil {
+			break
 		}
+
+		jobsToRun[pendingJob.Job.ID] = *pendingJob.Job
+		s.runningJobs[pendingJob.Job.ID] = pendingJob
+
 	}
 
 	for _, finishedJob := range req.FinishedJob {

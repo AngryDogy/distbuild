@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 const (
@@ -49,6 +50,8 @@ type Worker struct {
 	freeSlots *atomic.Int64
 
 	workdir string
+
+	ticker *time.Ticker
 }
 
 func New(
@@ -95,6 +98,8 @@ func New(
 		}(),
 
 		workdir: workerPath.String(),
+
+		ticker: time.NewTicker(time.Second),
 	}
 }
 
@@ -104,12 +109,6 @@ func (w *Worker) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 func (w *Worker) Run(ctx context.Context) error {
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
 		response, err := w.heartbeat(ctx)
 
 		if err != nil {
@@ -130,6 +129,13 @@ func (w *Worker) Run(ctx context.Context) error {
 				go w.execute(ctx, &job)
 			}
 		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-w.ticker.C:
+		}
+
 	}
 }
 
@@ -178,7 +184,7 @@ func (w *Worker) execute(ctx context.Context, job *api.JobSpec) {
 		})
 		if err != nil {
 			w.logger.Error("render cmd failed", zap.Error(err))
-			return
+			continue
 		}
 
 		if cmd.Exec != nil {
@@ -194,6 +200,8 @@ func (w *Worker) execute(ctx context.Context, job *api.JobSpec) {
 
 			cmdExecutable.Stdout = &stdout
 			cmdExecutable.Stderr = &stderr
+
+			cmdExecutable.Dir = w.workdir
 
 			err = cmdExecutable.Run()
 			if err != nil {

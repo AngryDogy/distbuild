@@ -37,9 +37,12 @@ func NewCoordinator(
 	coordinatorScheduler := scheduler.NewScheduler(log, defaultConfig)
 
 	coordinator := &Coordinator{
-		logger:    log,
-		mux:       http.NewServeMux(),
-		fileCache: fileCache,
+		logger: log,
+		mux:    http.NewServeMux(),
+
+		fileCache:        fileCache,
+		fileCacheHandler: filecache.NewHandler(log, fileCache),
+
 		heartbeatHandler: api.NewHeartbeatHandler(log, &heartbeatService{
 			scheduler:   coordinatorScheduler,
 			runningJobs: make(map[build.ID]*scheduler.PendingJob),
@@ -49,8 +52,8 @@ func NewCoordinator(
 			scheduler: coordinatorScheduler,
 			signalMap: make(map[build.ID]chan struct{}),
 		}),
-		fileCacheHandler: filecache.NewHandler(log, fileCache),
 	}
+
 	coordinator.heartbeatHandler.Register(coordinator.mux)
 	coordinator.buildHandler.Register(coordinator.mux)
 	coordinator.fileCacheHandler.Register(coordinator.mux)

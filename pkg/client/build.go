@@ -62,8 +62,6 @@ func (c *Client) Build(ctx context.Context, graph build.Graph, lsn BuildListener
 	}
 
 	for _, id := range startStatusBuild.MissingFiles {
-		q := id.Path()
-		_ = q
 		pathToFile := filepath.Join(c.sourceDir, graph.SourceFiles[id])
 
 		err = c.cacheClient.Upload(ctx, id, pathToFile)
