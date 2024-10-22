@@ -41,10 +41,19 @@ func (s *buildService) StartBuild(ctx context.Context, request *api.BuildRequest
 	s.signalMap[buildID] = make(chan struct{}, 1)
 	s.signalMapMutex.Unlock()
 
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-s.signalMap[buildID]:
+Loop:
+	for {
+		s.signalMapMutex.Lock()
+		select {
+		case <-ctx.Done():
+			s.signalMapMutex.Unlock()
+			return ctx.Err()
+		case <-s.signalMap[buildID]:
+			s.signalMapMutex.Unlock()
+			break Loop
+		default:
+			s.signalMapMutex.Unlock()
+		}
 	}
 
 	request.Graph.Jobs = build.TopSort(request.Graph.Jobs)
@@ -57,22 +66,22 @@ func (s *buildService) StartBuild(ctx context.Context, request *api.BuildRequest
 		})
 
 		wg.Add(1)
-		go func(currentJob *scheduler.PendingJob) {
+		go func(finished chan api.JobResult) {
 			defer wg.Done()
 			select {
-			case <-currentJob.Finished:
+			case result := <-finished:
 				w.Updated(&api.StatusUpdate{
 					JobFinished: &api.JobResult{
-						ID:       currentJob.Job.ID,
-						Stdout:   currentJob.Result.Stdout,
-						Stderr:   currentJob.Result.Stderr,
-						Error:    currentJob.Result.Error,
-						ExitCode: currentJob.Result.ExitCode,
+						ID:       result.ID,
+						Stdout:   result.Stdout,
+						Stderr:   result.Stderr,
+						Error:    result.Error,
+						ExitCode: result.ExitCode,
 					},
 				})
 			case <-ctx.Done():
 			}
-		}(pendingJob)
+		}(pendingJob.Finished)
 	}
 	wg.Wait()
 	return nil

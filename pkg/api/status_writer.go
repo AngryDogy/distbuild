@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"go.uber.org/zap"
 	"net/http"
+	"sync"
 )
 
 type StatusWriter interface {
@@ -15,6 +16,7 @@ type statusWriter struct {
 	logger     *zap.Logger
 	w          http.ResponseWriter
 	controller *http.ResponseController
+	mutex      sync.Mutex
 }
 
 func newStatusWriter(l *zap.Logger, w http.ResponseWriter) StatusWriter {
@@ -26,6 +28,9 @@ func newStatusWriter(l *zap.Logger, w http.ResponseWriter) StatusWriter {
 }
 
 func (sw *statusWriter) Started(rsp *BuildStarted) error {
+	sw.mutex.Lock()
+	defer sw.mutex.Unlock()
+
 	data, err := json.Marshal(rsp)
 	if err != nil {
 		return err
@@ -42,6 +47,9 @@ func (sw *statusWriter) Started(rsp *BuildStarted) error {
 }
 
 func (sw *statusWriter) Updated(status *StatusUpdate) error {
+	sw.mutex.Lock()
+	defer sw.mutex.Unlock()
+
 	data, err := json.Marshal(status)
 	if err != nil {
 		return err

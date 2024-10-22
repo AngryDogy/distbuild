@@ -22,12 +22,14 @@ func (s *heartbeatService) Heartbeat(ctx context.Context, req *api.HeartbeatRequ
 
 			pendingJob := s.runningJobs[fmt.Sprintf("%s%s", req.WorkerID, finishedJob.ID)]
 
-			pendingJob.Result.Stdout = finishedJob.Stdout
-			pendingJob.Result.Stderr = finishedJob.Stderr
-			pendingJob.Result.Error = finishedJob.Error
-			pendingJob.Result.ExitCode = finishedJob.ExitCode
+			pendingJob.Finished <- api.JobResult{
+				ID:       pendingJob.Job.ID,
+				Stdout:   finishedJob.Stdout,
+				Stderr:   finishedJob.Stderr,
+				Error:    finishedJob.Error,
+				ExitCode: finishedJob.ExitCode,
+			}
 
-			close(s.runningJobs[jobKey].Finished)
 			delete(s.runningJobs, jobKey)
 		}
 	}

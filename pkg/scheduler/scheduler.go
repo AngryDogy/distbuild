@@ -17,8 +17,7 @@ var TimeAfter = time.After
 
 type PendingJob struct {
 	Job      *api.JobSpec
-	Finished chan struct{}
-	Result   *api.JobResult
+	Finished chan api.JobResult
 }
 
 type Config struct {
@@ -69,8 +68,7 @@ func (c *Scheduler) OnJobComplete(workerID api.WorkerID, jobID build.ID, res *ap
 func (c *Scheduler) ScheduleJob(job *api.JobSpec) *PendingJob {
 	pendingJob := &PendingJob{
 		Job:      job,
-		Finished: make(chan struct{}),
-		Result:   &api.JobResult{},
+		Finished: make(chan api.JobResult),
 	}
 	c.queueMutex.Lock()
 	defer c.queueMutex.Unlock()
@@ -81,12 +79,13 @@ func (c *Scheduler) ScheduleJob(job *api.JobSpec) *PendingJob {
 }
 
 func (c *Scheduler) PickJob(ctx context.Context, workerID api.WorkerID) *PendingJob {
+	c.queueMutex.Lock()
+	defer c.queueMutex.Unlock()
+
 	if len(c.queue) == 0 {
 		c.logger.Info("scheduler queue is empty")
 		return nil
 	}
-	c.completedMutex.Lock()
-	defer c.completedMutex.Unlock()
 
 	pendingJob := c.queue[0]
 	c.queue = c.queue[1:]
