@@ -109,3 +109,7 @@ func (c *Cache) Get(file build.ID) (path string, unlock func(), err error) {
 	err = convertErr(err)
 	return
 }
+
+func (c *Cache) GetCacheDir() string {
+	return c.cache.GetCacheDir()
+}

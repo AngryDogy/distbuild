@@ -18,6 +18,7 @@ type Coordinator struct {
 	logger           *zap.Logger
 	mux              *http.ServeMux
 	fileCache        *filecache.Cache
+	fileCacheClient  *filecache.Client
 	heartbeatHandler *api.HeartbeatHandler
 	buildHandler     *api.BuildHandler
 	fileCacheHandler *filecache.Handler

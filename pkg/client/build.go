@@ -9,6 +9,7 @@ import (
 	"gitlab.com/manytask/itmo-go/public/distbuild/pkg/filecache"
 	"io"
 	"log"
+	"path/filepath"
 
 	"go.uber.org/zap"
 
@@ -40,7 +41,7 @@ func NewClient(
 			}
 			return cache
 		}(),
-		cacheClient: filecache.NewClient(l, sourceDir),
+		cacheClient: filecache.NewClient(l, apiEndpoint),
 		buildClient: api.NewBuildClient(l, apiEndpoint),
 	}
 }
@@ -54,7 +55,6 @@ type BuildListener interface {
 }
 
 func (c *Client) Build(ctx context.Context, graph build.Graph, lsn BuildListener) error {
-
 	startStatusBuild, statusReader, err := c.buildClient.StartBuild(ctx, &api.BuildRequest{Graph: graph})
 	if err != nil {
 		c.logger.Error("failed to start build", zap.Error(err))
@@ -62,13 +62,11 @@ func (c *Client) Build(ctx context.Context, graph build.Graph, lsn BuildListener
 	}
 
 	for _, id := range startStatusBuild.MissingFiles {
-		path, unlock, err := c.cacheFile.Get(id)
-		if err != nil {
-			c.logger.Error("failed to open cache", zap.Error(err))
-			return err
-		}
-		unlock()
-		err = c.cacheClient.Upload(ctx, id, path)
+		q := id.Path()
+		_ = q
+		pathToFile := filepath.Join(c.sourceDir, graph.SourceFiles[id])
+
+		err = c.cacheClient.Upload(ctx, id, pathToFile)
 		if err != nil {
 			c.logger.Error("failed to upload file", zap.Error(err))
 			return err

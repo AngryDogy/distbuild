@@ -189,3 +189,7 @@ func (c *Cache) Get(artifact build.ID) (path string, unlock func(), err error) {
 	}
 	return
 }
+
+func (c *Cache) GetCacheDir() string {
+	return c.cacheDir
+}
