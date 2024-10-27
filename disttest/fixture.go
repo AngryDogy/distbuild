@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"gitlab.com/manytask/itmo-go/public/distbuild/pkg/api"
 	"gitlab.com/manytask/itmo-go/public/distbuild/pkg/artifact"
@@ -170,14 +171,14 @@ func newEnv(t *testing.T, config *Config) (e *env, cancel func()) {
 		}(w)
 	}
 
-	/*go func() {
+	go func() {
 		select {
 		case <-time.After(time.Second * 10):
 			panic("test hang")
 		case <-env.Ctx.Done():
 			return
 		}
-	}()*/
+	}()
 
 	return env, func() {
 		cancelRootContext()

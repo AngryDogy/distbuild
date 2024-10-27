@@ -1,7 +1,5 @@
 # distbuild
 
-В этом задании вам нужно будет реализовать систему распределённой сборки.
-
 Система сборки получает на вход граф сборки и файлы с исходным кодом. Результатом сборки
 являются исполняемые файлы и stderr/stdout запущенных процессов.
 
@@ -65,7 +63,7 @@ type Job struct {
 
 ## Архитектура системы
 
-Наша система будет состоять из трех компонент.
+Система будет состоять из трех компонент.
  * Клиент - процесс, запускающий сборку.
  * Воркер - процесс, запускающий команды компиляции и тестирования.
  * Координатор - центральный процесс в системе, общается с клиентами и воркерами. Раздаёт задачи
@@ -76,54 +74,3 @@ type Job struct {
 2. Координатор сохраняет граф сборки в памяти и начинает его исполнение.
 3. Воркеры начинают выполнять вершины графа, пересылая друг другу выходные директории джобов.
 4. Результаты работы джобов скачиваются на клиента.
-
-# Как решать эту задачу
-
-Задача разбита на шаги. В начале, вам нужно будет реализовать небольшой набор независимых пакетов,
-которые реализует нужные примитивы. Код в этих пакетах покрыт юниттестами. В каждом пакете находится
-файл README.md, объясняющий подзадачу.
-
-Рекомендуемый порядок выполнения:
-
-- [`distbuild/pkg/build`](./pkg/build) - определение графа сборки. В этом пакете ничего писать не нужно,
-  нужно ознакомиться с существующим кодом.
-- [`distbuild/pkg/tarstream`](./pkg/tarstream) - передача директории через сокет. В этом пакете ничего
-  писать не нужно, нужно ознакомиться с существующим кодом.
-- [`distbuild/pkg/api`](./pkg/api) - протокол общения между компонентами.
-- [`distbuild/pkg/artifact`](./pkg/artifact) - кеш артефактов и протокол передачи артефактов между воркерами.
-- [`distbuild/pkg/filecache`](./pkg/filecache) - кеш файлов и протокол передачи файлов между компонентами.
-- [`distbuild/pkg/scheduler`](./pkg/scheduler) - планировщик с эвристикой локальности.
-
-После того, как все кубики будут готовы, нужно будет соединить их вместе, реализовав [`distbuild/pkg/worker`](./pkg/worker),
-[`distbuild/pkg/client`](./pkg/client) и [`distbuild/pkg/dist`](./pkg/dist). Код в этих пакетах нужно отлаживать на
-интеграционных тестах в [`distbuild/disttest`](./disttest).
-
-Код тестов в этом задании менять нельзя. Это значит, что вы не можете менять интерфейсы в тех местах, где
-код покрыт тестами.
-
-<details>
-  <summary markdown="span">Сколько кода нужно написать?</summary>
-  
-  ```
-prime@fedora ~/C/s/distbuild (master)> find -iname '*_solution.go' | grep -v scheduler_solution| xargs wc -l
-  123 ./pkg/api/build_client_solution.go
-  140 ./pkg/api/build_handler_solution.go
-   58 ./pkg/api/heartbeat_client_solution.go
-   62 ./pkg/api/heartbeat_handler_solution.go
-    5 ./pkg/artifact/cache_solution.go
-   44 ./pkg/artifact/client_solution.go
-   56 ./pkg/artifact/handler_solution.go
-  126 ./pkg/client/build_solution.go
-  121 ./pkg/dist/build_solution.go
-  122 ./pkg/dist/coordinator_solution.go
-   85 ./pkg/filecache/client_solution.go
-    5 ./pkg/filecache/filecache_solution.go
-  101 ./pkg/filecache/handler_solution.go
-    5 ./pkg/tarstream/stream_solution.go
-   47 ./pkg/worker/download_solution.go
-  283 ./pkg/worker/job_solution.go
-   25 ./pkg/worker/state_solution.go
-  113 ./pkg/worker/worker_solution.go
- 1521 total
-  ```
-</details>
